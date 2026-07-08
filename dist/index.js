@@ -1379,17 +1379,24 @@ const request_error_1 = __nccwpck_require__(1015);
 const octokit_client_1 = __nccwpck_require__(3489);
 const p_limit_1 = __importDefault(__nccwpck_require__(7989));
 const utils = __importStar(__nccwpck_require__(9277));
-const ERROR_PR_ALREADY_EXISTS = 'A pull request already exists for';
+const ERROR_PR_ALREADY_EXISTS = 'pull request already exists for';
 const ERROR_PR_REVIEW_TOKEN_SCOPE = 'Validation Failed: "Could not resolve to a node with the global id of';
 const ERROR_PR_FORK_COLLAB = `Fork collab can't be granted by someone without permission`;
 const blobCreationLimit = (0, p_limit_1.default)(8);
+const FORGEJO_HOSTNAMES = ['codeberg.org'];
 class GitHubHelper {
     constructor(githubServerHostname, token) {
+        this.isForgejo = false;
         const options = {};
         if (token) {
             options.auth = `${token}`;
         }
-        if (githubServerHostname !== 'github.com') {
+        if (FORGEJO_HOSTNAMES.includes(githubServerHostname)) {
+            this.isForgejo = true;
+            options.baseUrl = `https://${githubServerHostname}/api/v1`;
+            core.warning('Not all features work with a Forgejo API');
+        }
+        else if (githubServerHostname !== 'github.com') {
             options.baseUrl = `https://${githubServerHostname}/api/v3`;
         }
         else {
@@ -1450,13 +1457,16 @@ class GitHubHelper {
             // Try to create the pull request
             try {
                 core.info(`Attempting creation of pull request`);
-                const { data: pull } = yield this.octokit.rest.pulls.create(Object.assign(Object.assign({}, this.parseRepository(baseRepository)), { title: inputs.title, head: headBranch, head_repo: headRepository, base: inputs.base, body: inputs.body, draft: inputs.draft.value, maintainer_can_modify: inputs.maintainerCanModify }));
+                const { data: pull } = yield this.octokit.rest.pulls.create(Object.assign(Object.assign({}, this.parseRepository(baseRepository)), { title: this.isForgejo && inputs.draft.value
+                        ? `WIP: ${inputs.title}`
+                        : inputs.title, head: headBranch, head_repo: headRepository, base: inputs.base, body: inputs.body, draft: inputs.draft.value, maintainer_can_modify: inputs.maintainerCanModify // ignored for Forgejo
+                 }));
                 core.info(`Created pull request #${pull.number} (${headBranch} => ${inputs.base})`);
                 return {
                     number: pull.number,
                     html_url: pull.html_url,
-                    node_id: pull.node_id,
-                    draft: pull.draft,
+                    node_id: this.isForgejo ? 'unknown' : pull.node_id,
+                    draft: this.isForgejo ? /^WIP: /.test(pull.title) : pull.draft,
                     created: true
                 };
             }
@@ -1483,8 +1493,8 @@ class GitHubHelper {
             return {
                 number: pull.number,
                 html_url: pull.html_url,
-                node_id: pull.node_id,
-                draft: pull.draft,
+                node_id: this.isForgejo ? 'unknown' : pull.node_id,
+                draft: this.isForgejo ? /^WIP: /.test(pull.title) : pull.draft,
                 created: false
             };
         });
