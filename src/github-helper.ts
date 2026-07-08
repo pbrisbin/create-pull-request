@@ -11,7 +11,7 @@ import {
 import pLimit from 'p-limit'
 import * as utils from './utils'
 
-const ERROR_PR_ALREADY_EXISTS = 'A pull request already exists for'
+const ERROR_PR_ALREADY_EXISTS = 'pull request already exists for'
 const ERROR_PR_REVIEW_TOKEN_SCOPE =
   'Validation Failed: "Could not resolve to a node with the global id of'
 const ERROR_PR_FORK_COLLAB = `Fork collab can't be granted by someone without permission`
@@ -44,15 +44,23 @@ type TreeObject = {
   type: 'blob' | 'commit'
 }
 
+const FORGEJO_HOSTNAMES = ['codeberg.org']
+
 export class GitHubHelper {
   private octokit: InstanceType<typeof Octokit>
+  private isForgejo: boolean = false
 
   constructor(githubServerHostname: string, token: string) {
     const options: OctokitOptions = {}
     if (token) {
       options.auth = `${token}`
     }
-    if (githubServerHostname !== 'github.com') {
+
+    if (FORGEJO_HOSTNAMES.includes(githubServerHostname)) {
+      this.isForgejo = true
+      options.baseUrl = `https://${githubServerHostname}/api/v1`
+      core.warning('Not all features work with a Forgejo API')
+    } else if (githubServerHostname !== 'github.com') {
       options.baseUrl = `https://${githubServerHostname}/api/v3`
     } else {
       options.baseUrl = 'https://api.github.com'
@@ -127,13 +135,16 @@ export class GitHubHelper {
       core.info(`Attempting creation of pull request`)
       const {data: pull} = await this.octokit.rest.pulls.create({
         ...this.parseRepository(baseRepository),
-        title: inputs.title,
+        title:
+          this.isForgejo && inputs.draft.value
+            ? `WIP: ${inputs.title}`
+            : inputs.title,
         head: headBranch,
-        head_repo: headRepository,
+        head_repo: headRepository, // ignored for Forgejo
         base: inputs.base,
         body: inputs.body,
-        draft: inputs.draft.value,
-        maintainer_can_modify: inputs.maintainerCanModify
+        draft: inputs.draft.value, // ignored for Forgejo
+        maintainer_can_modify: inputs.maintainerCanModify // ignored for Forgejo
       })
       core.info(
         `Created pull request #${pull.number} (${headBranch} => ${inputs.base})`
@@ -141,8 +152,8 @@ export class GitHubHelper {
       return {
         number: pull.number,
         html_url: pull.html_url,
-        node_id: pull.node_id,
-        draft: pull.draft,
+        node_id: this.isForgejo ? 'unknown' : pull.node_id,
+        draft: this.isForgejo ? /^WIP: /.test(pull.title) : pull.draft,
         created: true
       }
     } catch (e) {
@@ -182,8 +193,8 @@ export class GitHubHelper {
     return {
       number: pull.number,
       html_url: pull.html_url,
-      node_id: pull.node_id,
-      draft: pull.draft,
+      node_id: this.isForgejo ? 'unknown' : pull.node_id,
+      draft: this.isForgejo ? /^WIP: /.test(pull.title) : pull.draft,
       created: false
     }
   }
